@@ -1,0 +1,1725 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+
+<h2> Goddamned cyberaquarium </h2>
+
+<p id="generation"> </p>
+<p id="fps"> </p>
+<p id="monsters"> </p>
+
+<h2> Description: </h2>
+
+<p id="description"> </p>
+
+<script>
+    let VISUALIZATION = 0;
+
+    var node = document.getElementById("description");
+
+    function updDescription() {
+        switch (VISUALIZATION) {
+            case 0:
+                node.innerHTML = "The less hp, the more red. The more hp, the more green. The more energy, the more blue."
+                break;
+            case 1:
+                node.innerHTML = "Different color areas show exact colors, assigned to the monsters."
+                break;
+            case 2:
+                node.innerHTML = "Green: stochastic monsters. Red: matrix monsters. Blue: Turing monsters."
+                break;
+            case 3:
+                node.innerHTML = "The older, the more red. The younger, the more green."
+                break;
+        }
+    }
+
+    updDescription();
+</script>
+
+
+<button type="button" onclick="VISUALIZATION = 0; updDescription();">Show hp/energy</button> 
+<button type="button" onclick="VISUALIZATION = 1; updDescription();">Show populations</button> 
+<button type="button" onclick="VISUALIZATION = 2; updDescription();">Show classes</button> 
+<button type="button" onclick="VISUALIZATION = 3; updDescription();">Show ages</button> 
+
+
+
+<div align="center">
+
+    
+    <canvas id="myCanvas" width="500" height="100" style="
+        border:2px solid #d3d3d3; transform: scale(2.5, 2.5) translate(00px, 70px);
+
+        /* Stolen from here: https://stackoverflow.com/questions/7615009/disable-interpolation-when-scaling-a-canvas */
+        image-rendering: optimizeSpeed;             /* Older versions of FF          */
+        image-rendering: -moz-crisp-edges;          /* FF 6.0+                       */
+        image-rendering: -webkit-optimize-contrast; /* Safari                        */
+        image-rendering: -o-crisp-edges;            /* OS X & Windows Opera (12.02+) */
+        image-rendering: pixelated;                 /* Awesome future-browsers       */
+        -ms-interpolation-mode: nearest-neighbor;   /* IE */
+    ">
+    Your browser does not support the HTML5 canvas tag.
+    </canvas>
+</div>
+
+<script>
+
+    /*
+        DISCLAIMER:
+
+        The code itself is draft-ish and not good, I had to add semantics and google technical details of JS during writing.
+        It's full of smells and magic constants.
+        And then I implemented hard optimizations which ruined readability even more.
+
+        Have fun!
+    */
+
+    var canvas = document.getElementById("myCanvas");
+
+    var ctx = canvas.getContext("2d");
+
+    //ctx.webkitImageSmoothingEnabled = false;
+    //ctx.mozImageSmoothingEnabled = false;
+    //ctx.imageSmoothingEnabled = false;
+
+    let canW = canvas.clientWidth;
+    let canH = canvas.clientHeight;
+
+    ctx.rect(0, 0, canW, canH);
+    ctx.fill();
+
+    let imageData = ctx.getImageData(0, 0, canW, canH);
+
+    let imageData2 = ctx.getImageData(0, 0, canW, canH);
+
+    function setPixel(imageData, x, y, r, g, b, a){
+     
+        var index = (x + y * imageData.width);
+        imageData.data[index * 4 + 0] = r;
+        imageData.data[index * 4 + 1] = g;
+        imageData.data[index * 4 + 2] = b;
+        imageData.data[index * 4 + 3] = a;
+    }
+
+    function setPixelС(imageData, x, y, channel, value){
+     
+        var index = (x + y * imageData.width);
+        imageData.data[index * 4 + channel] = value;
+    }
+
+    function getPixel(imageData, x, y, channel) {
+
+        var index = (x + y * imageData.width);
+        return imageData.data[index * 4 + channel];
+    }
+    
+    ctx.putImageData(imageData, 0, 0);
+
+    class ArrayPool {
+        
+        static storeArray(stored_array) {
+
+            let size = stored_array.length;
+
+            let stack = ArrayPool.stacks[size];
+            
+            if (stack === undefined) {
+                stack = new Array();
+                ArrayPool.stacks[size] = stack;
+            }
+
+            stack.push(stored_array);
+
+        }
+
+        static fetchArray(size) {
+
+            let stack = ArrayPool.stacks[size];
+            
+            if (stack === undefined)
+                return new Array(size);
+
+            if (stack.length === 0)
+                return new Array(size);
+
+            return stack.pop();
+            
+        }
+    }
+
+    ArrayPool.stacks = new Array();
+
+    //
+    class Strategy {
+
+        constructor() {}
+
+        init(monster) {}
+
+        mutate(monster, hard) {}
+
+        // process
+        process(monster) {
+            monster.moves = true;
+            monster.direction = 2;
+        }
+
+        // copy mutated data to the child
+        derive(monster, child) {}
+
+        // collect strategy-specific data
+        die(monster) {}
+        
+    }
+    
+    class StochasticStrategy extends Strategy {
+
+        constructor() {
+            super();
+        }
+
+        init(monster) {
+            monster.genes = ArrayPool.fetchArray(9);
+            monster.integral_genes = ArrayPool.fetchArray(9);
+
+            for (let i = 0; i < 9; ++i) {
+                monster.genes[i] = Math.random();
+            }
+
+            this.stochastic_integrate(monster);
+        }
+
+        mutate(monster, hard) {
+
+            let t = Math.floor(Math.random() * 9);
+            
+            let mn = hard ? 0 : t;
+            let mx = hard ? 9 : t + 1;
+
+            let power = (hard ? 1 : 0.1);
+            
+            // normalize genes
+            for (let i = mn; i < mx; ++i) {
+                monster.genes[i] += power * (1 - 2 * Math.random()) * (monster.genes[i]);
+
+                if (monster.genes[i] < 0)
+                    monster.genes[i] = 0;
+            }           
+            
+            this.stochastic_integrate(monster);
+        }
+
+        derive(monster, child) {
+
+            child.genes = ArrayPool.fetchArray(monster.genes.length);
+            child.integral_genes = ArrayPool.fetchArray(monster.genes.length);
+
+            for (let i = 0; i < 9; ++i) {
+                child.genes[i] = monster.genes[i];
+                child.integral_genes[i] = monster.integral_genes[i];
+            }
+            
+            if (Math.random() < 0.5)
+                child.mutate(false);
+        }
+
+        die(monster) {
+
+            ArrayPool.storeArray(monster.genes);
+            ArrayPool.storeArray(monster.integral_genes);
+
+            monster.genes = null;
+            monster.integral_genes = null;
+        }
+
+        process(monster) {
+                
+            let action = Math.random();
+            let ig = monster.integral_genes;
+
+            if (action < ig[0]) {
+                monster.moves = true;
+            }
+
+            else if (action < ig[1]) {
+                monster.turns_right = true;
+            }
+
+            else if (action < ig[2]) {
+                monster.turns_left = true;
+            }
+
+            else if (action < ig[3]) {
+                monster.produces = true;
+            }
+
+            else if (action < ig[4]) {
+                monster.breeds = true;
+            }
+
+            else if (action < ig[5]) {
+                monster.attacks = true;
+            }
+
+            else if (action < ig[6]) {
+                monster.eats = true;
+            }
+
+            else if (action < ig[7]) {
+                monster.heals = true;
+            }
+
+            else if (action < ig[8]) {
+                monster.feeds = true;
+            }
+        }
+        
+        // utils
+        stochastic_integrate(monster) {
+            
+            let integral_sum = 0;
+
+            for (let i = 0; i < 9; ++i) {
+                integral_sum += monster.genes[i];
+            }
+
+            monster.genes[0] /= integral_sum;        
+            monster.integral_genes[0] = monster.genes[0];
+
+            let prev = monster.integral_genes[0];
+
+            // normalize genes
+            for (let i = 1; i < 9; ++i) {
+                monster.genes[i] /= integral_sum;
+                
+                prev = prev + monster.genes[i];
+                monster.integral_genes[i] = prev;
+            }
+
+        }
+        
+    }
+
+    let MATRIX_VALUE_BOUND = 10000;
+
+    let MATRIX_MEMORY_SIZE = 6;
+
+    let MATRIX_ACTIVITIES_SIZE = 9;
+    let MATRIX_OUTPUT_COUNT = MATRIX_ACTIVITIES_SIZE + MATRIX_MEMORY_SIZE;   // strict dependency!
+    
+    let MATRIX_SENSORS_SIZE = 13;
+    let MATRIX_INPUT_COUNT = MATRIX_SENSORS_SIZE + MATRIX_MEMORY_SIZE;   // strict dependency!
+
+    let MATRIX_TOTAL_SIZE = MATRIX_INPUT_COUNT * MATRIX_OUTPUT_COUNT; // strict dependency!
+    
+
+
+    /* TODO: make shared pool of same matrices instead of copying */
+    class MatrixStrategy extends Strategy {
+
+        constructor() {
+            super();
+        };
+
+        // 15 PARAMS: output
+        // 19 PARAMS: input
+        
+        init(monster) {
+            
+            monster.memory = ArrayPool.fetchArray(MATRIX_MEMORY_SIZE);
+
+            for (let i = 0; i < MATRIX_MEMORY_SIZE; ++i) {
+                monster.memory[i] = 1 - 2 * Math.random();
+
+            }
+
+            monster.transform = ArrayPool.fetchArray(MATRIX_TOTAL_SIZE);
+
+            for (let k = 0; k < MATRIX_TOTAL_SIZE; ++k) {
+                monster.transform[k] = (k % MATRIX_INPUT_COUNT) > MATRIX_SENSORS_SIZE ? 0 : (Math.random() < 0.5 ? 1 - 0.5 * Math.random() : -1 + 0.5 * Math.random());
+            }
+
+            // if only zeroes after 12, then no need to load memory at all, so it's kinda optimization
+            monster.virgin_matrix = true;
+
+        }
+
+        mutate(monster, hard) {
+
+            let t = Math.floor(Math.random() * MATRIX_TOTAL_SIZE);
+
+            // enable memory and random processing
+            if (hard || t % MATRIX_INPUT_COUNT > MATRIX_SENSORS_SIZE) {
+                monster.virgin_matrix = false;
+            }
+            
+            let mn = hard ? 0 : t;
+            let mx = hard ? MATRIX_TOTAL_SIZE : t + 1;
+
+            let power = (hard ? 1.0 : 0.1);
+
+            for (let k = mn; k < mx; ++k) {
+
+                let asgn = monster.transform[k];
+
+                asgn = asgn + power * (1 - 2 * Math.random());
+
+                if (asgn > MATRIX_VALUE_BOUND)
+                    monster.transform[k] = MATRIX_VALUE_BOUND;
+                else if (asgn < -MATRIX_VALUE_BOUND)
+                    monster.transform[k] = -MATRIX_VALUE_BOUND;
+                else
+                    monster.transform[k] = asgn;
+            }
+    
+            
+            
+        }
+
+        derive(monster, child) {
+            
+            child.memory = ArrayPool.fetchArray(monster.memory.length);
+            child.transform = ArrayPool.fetchArray(monster.transform.length);
+            child.virgin_matrix = monster.virgin_matrix;
+
+            for (let i = 0; i < MATRIX_MEMORY_SIZE; ++i) {
+                child.memory[i] = 0; //monster.memory[i];
+
+                //if (isNaN(monster.memory[i]))
+                    //alert("OH SHIT DERIV mem: " + i + " " + monster.age);
+
+            }
+
+            for (let k = 0; k < MATRIX_TOTAL_SIZE; ++k) {
+                child.transform[k] = monster.transform[k];
+
+                //if (isNaN(monster.transform[k]))
+                    //alert("OH SHIT DERIV: " + k + " " + monster.age);
+            }
+
+            if (Math.random() < 0.5)
+                child.mutate(false);
+        }
+
+        die(monster) {
+
+            ArrayPool.storeArray(monster.memory);
+            ArrayPool.storeArray(monster.transform);
+            
+            monster.memory = null;
+            monster.transform = null;
+        }
+
+        process(monster) {
+
+            // todo: from memory
+            let mem_vec = monster.memory;
+
+            let inp_vec = MatrixStrategy.inp_vec;
+                        
+            //let inp_vec = ArrayPool.fetchArray(19);
+            
+            // 13 sensors
+            inp_vec[0] = monster.hp / 1000 - 500;
+            inp_vec[1] = monster.energy / 1000 - 500;
+            inp_vec[2] = monster.age / 400 - 200;
+            
+            inp_vec[3] = monster.co_hp / 1000 - 500;
+            inp_vec[4] = monster.co_energy / 1000 - 500;
+            inp_vec[5] = monster.co_age / 400 - 200;
+            
+            inp_vec[6] = monster.co_dead ? 1 : -1;
+            inp_vec[7] = monster.co_food / 1000 - 500;
+            inp_vec[8] = monster.app_difference * 2 - 1;
+
+            inp_vec[9] = monster.light > MATRIX_VALUE_BOUND ? MATRIX_VALUE_BOUND : monster.light;
+            inp_vec[10] = monster.sth_left ? 1 : -1;
+            inp_vec[11] = monster.sth_right ? 1 : -1;
+            inp_vec[12] = Math.random();
+            
+            // todo: load from memory
+            let tm = monster.transform;
+
+            //out_vec[0] = tm[0] * inp_vec[0] + ... + tm[15] * inp_vec[15];
+            //out_vec[1] = tm[19] * inp_vec[0] + ... + tm[34] * inp_vec[15];
+
+            let k = 0;        
+
+            let out_vec = MatrixStrategy.out_vec; //new Array(15);
+            
+            // making decision by choosing the most triggered coord
+            let max_id;
+            let max_val;
+
+            let vm = monster.virgin_matrix;
+
+            // multiply matrix on vector to get another vector (fucking slow =( )
+            for (let j = 0; j < MATRIX_OUTPUT_COUNT; ++j) {
+                
+                let sum = 0;
+
+                let sum1 = 0;
+                let sum2 = 0;
+                let sum3 = 0;
+                let sum4 = 0;
+
+                let itr = 0;
+                let nxt_itr = itr + 4;
+
+                while (nxt_itr < MATRIX_SENSORS_SIZE) {
+                    sum1 += inp_vec[itr] * tm[k];
+                    sum2 += inp_vec[itr + 1] * tm[k + 1];
+                    sum3 += inp_vec[itr + 2] * tm[k + 2];
+                    sum4 += inp_vec[itr + 3] * tm[k + 3];
+                    k = k + 4;
+                    itr = nxt_itr;
+                    nxt_itr = nxt_itr + 4;
+                }
+
+
+                while (itr < MATRIX_SENSORS_SIZE) {
+                    sum += inp_vec[itr] * tm[k];
+                    ++k;
+                    ++itr;
+                }
+
+                // if virgin matrix, then no need to load memory
+                if (vm)
+                    k = k + MATRIX_MEMORY_SIZE;
+                else
+                    for (let i = 0; i < MATRIX_MEMORY_SIZE; ++i) {
+                        sum += mem_vec[i] * tm[k];
+                        ++k;
+                    }
+
+                out_vec[j] = sum;
+
+                // make desicion of what to do based on maximum value
+                if (j === 0) {
+                    max_id = 0;
+                    max_val = sum;
+                }
+                else if (j < MATRIX_ACTIVITIES_SIZE && max_val < sum) {
+                    max_id = j;
+                    max_val = sum;
+                }
+            }
+
+            // write these 6 values back to memory - 6 values
+            for (let i = 0; i < MATRIX_MEMORY_SIZE; ++i) {
+
+                let asgn = out_vec[i + MATRIX_ACTIVITIES_SIZE];
+
+                if (asgn > MATRIX_VALUE_BOUND)
+                    mem_vec[i] = MATRIX_VALUE_BOUND;
+                else if (asgn < -MATRIX_VALUE_BOUND)
+                    mem_vec[i] = -MATRIX_VALUE_BOUND
+                else
+                    mem_vec[i] = asgn;
+            }
+            
+            
+            if (max_id === 0) {
+                monster.moves = true;
+            }
+            else if (max_id === 3) {
+                monster.turns_left = true;
+            }
+            else if (max_id === 4) {
+                monster.turns_right = true;
+            }
+            else if (max_id === 6) {
+                monster.produces = true;
+            }
+            else if (max_id === 2) {
+                monster.eats = true;
+            }
+            else if (max_id === 1) {
+                monster.attacks = true;
+            }
+            else if (max_id === 5) {
+                monster.breeds = true;
+            }
+            else if (max_id === 7) {
+                monster.heals = true;
+            }
+            else if (max_id === 8) {
+                monster.feeds = true;
+            }
+        }
+
+    }
+
+    MatrixStrategy.out_vec = new Array(MATRIX_OUTPUT_COUNT);
+    MatrixStrategy.inp_vec = new Array(MATRIX_SENSORS_SIZE);
+
+
+    /* TODO: make shared pool of same programs instead of copying */
+    class TuringStrategy extends Strategy {
+
+        /*
+            Регистры: 0-8 - запись даёт приоритет команды, чтение даёт 0 всегда
+            9-21    - запись в них ни на что не влияет, чтение из них читает вход - они все флоаты
+
+            127 - A0 или WREG
+            126 - A1
+            125 - A2
+            124 - A3
+
+            Все остальные регистры вообще пофигу, что делают.
+
+            Система команд, программа состоит из видов: инструкция+данные, где инструкция берётся по Math.floor() по модулю числа инструкций
+            Адреса вычисляются по модулю размера памяти.
+
+            0   --  NOP -       -- ничего не делать
+            1   --  LOAD C    -- загружает значение C в регистр WREG
+            2   --  FETCH x   -- копирует значение по адресу x во WREG
+            3   --  STORE x  --  копирует значение из WREG по адресу x
+            4   --  WA a    -- копирует значение из WREG в аккумулятор a (с большей вероятностью попадёт куда надо, чем предыдущая)
+            5   --  AW a    -- копирует значение из аккумулятора a во WREG
+            6   --  ADD a    -- прибавляет значение WREG к аккумулятору a 
+            7   --  SUB a    -- вычитает значение WREG из аккумулятора a
+            8   --  MUL a    -- умножает значение WREG на аккумулятор a
+            9   --  DIV a    -- делит значение WREG на аккумулятор a
+            10  --  NEG a    -- пишет в a значение -a
+            11  --  READ a    -- пишет во WREG значение по адресу a
+            12  --  WRITE a    -- пишет из WREG значение по адресу a
+            13  --  MORE a    -- WREG берётся с отрицательным знаком, если значение по a больше WREG, иначе с положительным
+            14  --  LESS a    -- WREG берётся с отрицательным знаком, если значение по a меньше WREG, иначе с положительным
+            15  --  JMP c     -- безусловный прыжок на инструкцию c
+            16  --  JPOS c    -- прыжок на инструкцию c, если WREG отрицательный
+            17  --  OUT k    -- форсирует приоритет k на один раз и синхронизируется с картой
+            18  --  RANDOM a   -- рандомит аккумулятор a, с амплитудой WREG
+            19  --  LDSEN s    --- загружает во WREG сенсор s
+
+            basic program:
+
+            OUT 5
+            SYNC -
+            OUT 4
+            SYNC -
+            OUT 6
+            LOAD 0.8
+            WA 1
+            FETCH 21
+            LESS 1
+            JPOS 0
+            JMP 4
+            
+             
+        */
+
+        // прямо - влево - размножиться - вправо - прямо - вправо - размножиться - влево - прямо - цикл фотосинтеза
+
+        constructor() {
+            super();
+        }
+
+
+        init(monster) {
+
+            monster.data_memory = ArrayPool.fetchArray(128);
+            monster.program = ArrayPool.fetchArray(128);
+            monster.pip = 0;
+            monster.priority = 0;
+
+            for (let i = 0; i < 128; ++i) {
+                monster.data_memory[i] = (1 - 2 * Math.random()) * 128;
+
+                if (i % 2 === 0) {
+                    
+                    monster.program[i] = Math.random() * 128;
+
+                    if (Math.random() < 0.5)
+                        monster.program[i] = 19;
+
+                    if (Math.random() < 0.5)
+                        monster.program[i] = 17;
+
+                    if (Math.random() < 0.2)
+                        monster.program[i] = 16;
+
+                    if (Math.random() < 0.2)
+                        monster.program[i] = 15;
+
+                    if (Math.random() < 0.1)
+                        monster.program[i] = 0;
+
+                    if (Math.random() < 0.1) {
+                        monster.program[i] = 13;
+                    }
+
+                    if (Math.random() < 0.1) {
+                        monster.program[i] = 14;
+                    }
+
+                }
+                else
+                    monster.program[i] = (1 - 2 * Math.random()) * 128;
+            }
+
+        }
+
+        // process
+        process(monster) {
+
+            // run a program
+
+            let prog = monster.program;
+            let data_mem = monster.data_memory;
+            let pip = monster.pip;
+
+            let max_ticks = 8;
+
+            let prio_forced;
+            let prio_force = false;
+
+            data_mem[9] = monster.hp / 1000;
+            data_mem[10] = monster.energy / 1000;
+            data_mem[11] = monster.age / 400;
+            
+            data_mem[12] = monster.co_hp / 1000;
+            data_mem[13] = monster.co_energy / 1000;
+            data_mem[14] = monster.co_age / 400;
+            
+            data_mem[15] = monster.co_dead ? 1 : 0;
+            data_mem[16] = monster.co_food / 1000;
+            data_mem[17] = monster.app_difference;
+
+            data_mem[18] = monster.light > 10000 ? 10000 : monster.light;
+            data_mem[19] = monster.sth_left ? 1 : 0;
+            data_mem[20] = monster.sth_right ? 1 : 0;
+            data_mem[21] = Math.random();
+
+            while (max_ticks --> 0) {
+                
+                let opcode = Math.abs(Math.floor(prog[2 * pip])) % 20;
+                let data = prog[2 * pip + 1];
+                let int_data = Math.floor(data);
+                let wreg = 127;
+                let acc_addr = wreg - Math.abs(int_data) % 4;
+                let prio = Math.abs(int_data) % 9;
+                let goto = Math.abs(int_data) % 64;
+                let addr = Math.abs(int_data) % 128;
+                let indir = Math.abs(Math.floor(data_mem[acc_addr])) % 128;
+
+                let sen_addr = Math.abs(int_data) % 9;
+
+                //alert(opcode + " " + data);
+
+                let goto_flag = false;
+
+                switch (opcode) {
+                    case 1:
+                        data_mem[wreg] = data;
+                        break;
+                    case 2: //fix
+                        if (addr < 9)
+                            data_mem[wreg] = 0;
+                        else
+                            data_mem[wreg] = data_mem[addr];
+
+                        break;
+                    case 3: //fix
+                        if (addr < 9)
+                            monster.priority = addr;
+                        else if (addr > 21)                        
+                            data_mem[addr] = data_mem[wreg];
+                        break;
+                    case 4:
+                        data_mem[acc_addr] = data_mem[wreg];
+                        break;
+                    case 5:
+                        data_mem[wreg] = data_mem[acc_addr];
+                        break;
+                    case 6:
+                        data_mem[acc_addr] += data_mem[wreg];
+                        break;
+                    case 7:
+                        data_mem[acc_addr] -= data_mem[wreg];
+                        break;
+                    case 8:
+                        data_mem[acc_addr] *= data_mem[wreg];
+                        break;
+                    case 9:
+                        data_mem[acc_addr] /= data_mem[wreg];
+                        break;
+                    case 10:
+                        data_mem[acc_addr] = -data_mem[wreg];
+                        break;
+                    case 11: //fix
+                        if (indir < 9)
+                            data_mem[wreg] = 0;
+                        else
+                            data_mem[wreg] = data_mem[indir];
+                        break;
+                    case 12: //fix
+                        if (indir < 9)
+                            monster.priority = indir;
+                        else if (indir > 21)                        
+                            data_mem[indir] = data_mem[wreg];
+                        break;
+                    case 13:
+                        if (data_mem[acc_addr] > data_mem[wreg]) {
+                            if (data_mem[wreg] > 0) {
+                                data_mem[wreg] = -data_mem[wreg];
+                            }
+                        }
+                        else {
+                            if (data_mem[wreg] < 0) {
+                                data_mem[wreg] = -data_mem[wreg];
+                            }
+                        }
+                        break;
+                    case 14:
+                        if (data_mem[acc_addr] < data_mem[wreg]) {
+                            if (data_mem[wreg] > 0) {
+                                data_mem[wreg] = -data_mem[wreg];
+                            }
+                        }
+                        else {
+                            if (data_mem[wreg] < 0) {
+                                data_mem[wreg] = -data_mem[wreg];
+                            }
+                        }
+                        break;
+                    case 15:
+                        goto_flag = true;
+                        break;
+                    case 16:
+                        if (data_mem[wreg] < 0) {
+                            goto_flag = true;
+                        }
+                        break;
+                    case 17:
+                        prio_forced = prio;
+                        prio_force = true;
+                        max_ticks = 0;
+                        break;
+                    case 18:
+                        data_mem[acc_addr] = (1 - 2 * Math.random()) * data_mem[wreg];
+                        break;
+                    case 19:
+                        data_mem[wreg] = data_mem[sen_addr];
+                        break;
+                  default:  //aka opcode === 0 aka NOP
+                    {};
+                }
+                
+                if (!goto_flag)
+                    pip = (pip + 1) % 64;
+                else
+                    pip = goto;
+            };
+
+            monster.pip = pip;
+
+            // setup by priority
+
+            let max_id = (prio_force ? prio_forced : monster.priority);
+
+            if (max_id === 0) {
+                monster.moves = true;
+            }
+            else if (max_id === 3) {
+                monster.turns_left = true;
+            }
+            else if (max_id === 4) {
+                monster.turns_right = true;
+            }
+            else if (max_id === 6) {
+                monster.produces = true;
+            }
+            else if (max_id === 2) {
+                monster.eats = true;
+            }
+            else if (max_id === 1) {
+                monster.attacks = true;
+            }
+            else if (max_id === 5) {
+                monster.breeds = true;
+            }
+            else if (max_id === 7) {
+                monster.heals = true;
+            }
+            else if (max_id === 8) {
+                monster.feeds = true;
+            }
+            
+        }
+
+        mutate(monster, hard) {
+    
+            if (Math.random() < (hard ? 0.9 : 0.1)) {
+                let randcom = Math.floor(Math.random() * 64) * 2;
+
+                if (Math.random() < 0.5)
+                    monster.program[randcom] = Math.floor(Math.random() * 128);
+                else
+                    monster.program[randcom + 1] = (1 - 2 * Math.random()) * (Math.random() < 0.5, 1, 128);
+
+                if (Math.random() < 0.1)
+                    monster.program[randcom] = 17;
+
+                if (Math.random() < 0.1)
+                    monster.program[randcom] = 16;
+
+                if (Math.random() < 0.1)
+                    monster.program[randcom] = 15;
+
+                if (Math.random() < 0.1)
+                    monster.program[randcom] = 19;
+
+                if (Math.random() < 0.1)
+                    monster.program[randcom] = 0;
+
+                if (Math.random() < 0.5)
+                    monster.program[randcom + 1] = Math.floor(Math.random() * 128);
+            }
+
+            if (Math.random() < 0.1) {
+                let randcom = Math.floor(Math.random() * 64) * 2;
+                let randcom2 = Math.floor(Math.random() * 64) * 2;
+
+                let tmpi = monster.program[randcom];
+                let tmpd = monster.program[randcom + 1];
+
+                monster.program[randcom] = monster.program[randcom2];
+                monster.program[randcom + 1] = monster.program[randcom2 + 1];
+
+                if (Math.random() < 0.5) {
+                    monster.program[randcom2] = tmpi;
+                    monster.program[randcom2 + 1] = tmpd;
+                }
+
+            }
+            
+        }
+        
+        // copy mutated data to the child
+        derive(monster, child) {
+            
+            child.data_memory = ArrayPool.fetchArray(128);
+            child.program = ArrayPool.fetchArray(128);
+            child.pip = 0; //monster.pip;
+            child.priority = monster.priority;
+
+            for (let i = 0; i < 128; ++i) {
+                child.data_memory[i] = monster.data_memory[i];
+                child.program[i] = monster.program[i];
+            } 
+
+            //if (Math.random() < 0.5)
+            child.mutate(false);
+
+        }
+
+        // collect strategy-specific data
+        die(monster) {
+            
+            ArrayPool.storeArray(monster.data_memory);
+            ArrayPool.storeArray(monster.program);
+
+            monster.data_memory = null;
+            monster.program = null;
+    
+                    
+        }
+        
+    }   
+
+    
+
+    let BLACKHOLE_STRATEGY = new Strategy();
+
+    let MATRIX_STRATEGY = new MatrixStrategy();
+    let STOCHASTIC_STRATEGY = new StochasticStrategy();
+    let TURING_STRATEGY = new TuringStrategy();
+
+    class Monster {
+
+        constructor() {
+            //this.init();
+        }
+
+        init_alpha() {
+            this.init();
+            this.is_alpha = true;
+        }
+
+        init(willBeDerived) {
+            
+            this.dead = false;
+            this.is_alpha = false;
+
+            this.hp = 1000;        // sensor
+            this.energy = 1000;        // sensor
+            this.age = 0;        // sensor
+
+            this.co_hp = 0;     // sensor-only
+            this.co_energy = 0;     // sensor-only    
+            this.co_age = 0;     // sensor-only      
+            this.co_dead = 0;     // sensor-only      
+            this.app_difference = 0;    // sensor-only
+            this.co_food = 0;       // sensor-only
+
+            this.sth_left = false;      //sensor-only
+            this.sth_right = false;     //sensor-only
+
+            this.light = 0;         // sensor-only
+            
+            this.being_food = 0;
+            
+            this.moves = false;
+            this.attacks = false;
+            this.eats = false;
+            this.turns_left = false;
+            this.turns_right = false;
+            this.breeds = false;
+            this.produces = false;
+            this.direction = (Math.random() < 0.5 ? 0 : 1) + (Math.random() < 0.5 ? 0 : 2);
+            this.heals = false;
+            this.feeds = false;
+
+            this.app_r = Math.random() < 0.5 ? 1 : 0;
+            this.app_g = Math.random() < 0.5 ? 1 : 0;
+            this.app_b = Math.random() < 0.5 ? 1 : 0;
+
+            this.app_r = Math.max(this.app_r, 0.01);
+            this.app_g = Math.max(this.app_g, 0.01);
+            this.app_b = Math.max(this.app_b, 0.01);
+
+            let nrm = this.app_r + this.app_g + this.app_b;
+            this.app_r = this.app_r / nrm;
+            this.app_g = this.app_g / nrm;
+            this.app_b = this.app_b / nrm;
+
+            this.view_attacked = false;
+    
+            if (!willBeDerived)
+                this.strategy.init(this);
+        }
+       
+        clean_view() {
+            this.view_attacked = false;
+        }
+
+        process() {
+
+            this.strategy.process(this);
+
+        }
+
+        die() {
+            this.dead = true;
+            this.being_food = this.hp + this.energy;
+            this.hp = 0;
+            this.energy = 0;
+            this.strategy.die(this);
+            this.strategy = BLACKHOLE_STRATEGY;
+            this.age = 0;
+            
+            this.moves = false;
+            this.attacks = false;
+            this.eats = false;
+            this.turns_left = false;
+            this.turns_right = false;
+            this.breeds = false;
+            this.produces = false;
+            this.heals = false;
+            this.feeds = false;
+        }
+
+        mutate(hard) {
+            
+            this.strategy.mutate(this, hard);
+
+            this.app_r += 0.01 + 0.02 * Math.random();
+            this.app_g += 0.01 + 0.02 * Math.random();
+            this.app_b += 0.01 + 0.02 * Math.random();
+
+            this.app_r = Math.max(this.app_r, 0.01);
+            this.app_g = Math.max(this.app_g, 0.01);
+            this.app_b = Math.max(this.app_b, 0.01);
+
+            let nrm = this.app_r + this.app_g + this.app_b;
+            this.app_r = this.app_r / nrm;
+            this.app_g = this.app_g / nrm;
+            this.app_b = this.app_b / nrm;
+        }
+
+        derive(parent) {
+            
+            //todo: derive depending on strategy
+            this.strategy = parent.strategy;
+            this.init(true);
+            parent.strategy.derive(parent, this);
+
+            this.direction = (parent.direction > 1 ? -2 : 2) + parent.direction;
+
+            // derive appearance
+            this.app_r = parent.app_r;
+            this.app_g = parent.app_g;
+            this.app_b = parent.app_b;
+
+        }        
+
+    }
+
+    class MonsterPool {
+        
+        //static pool = new Array();
+
+        static storeMonster(monster) {
+            MonsterPool.pool.push(monster);
+        }
+
+        static fetchMonster() {
+            
+            if (MonsterPool.pool.length === 0) {
+                return new Monster();
+            }
+            
+            let nxt = MonsterPool.pool.pop();
+            
+            return nxt;
+        }
+        
+    }
+
+    MonsterPool.pool = [];
+
+    ////////////////////////////////////////////////
+
+
+    let EDEM_AGE = 000;
+
+    class MonsterField {
+        
+        constructor(canW, canH) {
+            
+            let monsters = new Array(canW * canH);
+
+            this.canW = canW;
+            this.canH = canH;
+
+            for (let j = 0; j < canH; j += 1) {
+                
+                let jw = j * canW;
+
+                for (let i = 0; i < canW; i += 1) {
+
+                    let k = i + jw;
+                    // init monsters and quick arrays
+                    monsters[k] = null;
+                    
+                    /*
+                    if (Math.random() < 0.01)
+                        continue;
+                    monsters[k] = new Monster();
+                    monsters[k].strategy = BLACKHOLE_STRATEGY;
+                    monsters[k].init();
+                    monsters[k].die();
+                    */
+                }
+            }
+            
+            // monster buffer
+            this.monsters = monsters;
+
+            this.already_processed = false;
+
+            this.age = 0;
+            this.savedStep = 0;
+        }
+
+        keepProcessing(since) {
+
+            let canW = this.canW;
+            let canH = this.canH;
+
+            let atLeastOne = false;
+
+            let period = (Math.cos(Math.PI * this.age / 1000) + 1.0);
+            period = period * period / 4 + 0.15;
+
+            let kn = this.savedStep;
+            let i = kn % canW;
+            let j = Math.floor(kn / canW);
+            let jw = j * canW;
+
+            let maxaddr = canW * canH - 1;
+
+            let ticks = 0;
+            
+            // main loop (requires optimization)
+            for (let k = kn; k < canW * canH; k++) {                
+
+                ticks++;
+
+                // interrupt if outta allowed timespan
+                if (ticks % 500 === 0 || k === maxaddr) {
+                    let span2 = Date.now();
+
+                    if (span2 - since > 20 && atLeastOne) {
+                        this.savedStep = k;
+                        return false;                    
+                    }
+
+                }
+
+                atLeastOne = true;
+
+                i = k % canW;
+                
+                if (i === 0) {
+                    j = Math.floor(k / canW);
+                    jw = j * canW;
+                }
+                
+                let address = k;//i + jw;
+                let monster = this.monsters[address];
+
+                if (monster === null) {
+                    
+                    //spawn alpha particle in the topmost line
+                    if (j === 0 && this.already_processed && Math.random() < 0.2 * period) {
+                        monster = this.monsters[address] = MonsterPool.fetchMonster();
+                        monster.strategy = BLACKHOLE_STRATEGY;
+                        monster.moves = true;
+                        monster.init_alpha();
+                    }
+
+                    //else if (this.monsters_found === 0) {
+                        //break;
+                    //}
+                    
+                    continue;
+                }
+
+                let misa = monster.is_alpha;
+                let mosde = monster.dead;
+                
+                if (monster.already_processed === !this.already_processed) {
+                    continue;
+                }
+
+                monster.already_processed = !monster.already_processed;
+
+                if (misa) {
+                    monster.already_processed = this.already_processed;
+                    monster.hp = 1000;
+                    monster.energy = 1000;
+                }
+                
+                let dx, dy;
+
+                let mndr = monster.direction;
+                
+                // most likely direction is top
+                dx = 0;
+                if (mndr === 2) {
+                    dy = 1;
+                }
+                else if (mndr === 0) {
+                    dy = -1;
+                }
+                else if (mndr === 1) {
+                    dy = 0;
+                    dx = 1;
+                }
+                else /* if (mndr === 3) */ {
+                    dy = 0;
+                    dx = -1;
+                }
+                
+                
+                let coaddress = i + dx + (j + dy) * canW;
+                let co_in_bounds = i + dx >= 0 && j + dy >= 0 && i + dx < canW && j + dy < canH;
+                let comonster = null;
+
+                if (co_in_bounds)
+                    comonster = this.monsters[coaddress];
+
+                let comsnu = comonster === null;
+                let comsde = !comsnu && comonster.dead;
+
+                if (!mosde) {
+                    monster.energy = monster.energy - 1;
+                }
+                
+                monster.age = monster.age + 1;
+
+                // reduce age of dead monster
+                if (mosde && monster.age >= 1000) {
+
+                    monster.being_food -= 1;
+
+                    if (monster.being_food <= 0) {
+                        this.monsters[address] = null;
+                        MonsterPool.storeMonster(monster);
+                        continue;
+                    }
+                }
+
+                // marasm
+                if (!mosde && monster.age >= 400) {
+                    monster.mutate(false);
+                    monster.hp -= 10;
+                }
+
+                let hplz = monster.hp <= 0;
+                let enlz = monster.energy <= 0;
+
+                if (hplz)
+                    monster.hp = 0;
+                if (enlz)
+                    monster.energy = 0;
+                if (monster.energy > 1000)
+                    monster.energy = 1000;
+                if (monster.hp > 1000)
+                    monster.hp = 1000;
+                if (monster.being_food > 1000)
+                    monster.being_food = 1000;
+
+                // die
+                if (!mosde && (hplz || enlz || (j <= 1 && !misa))) {
+                    monster.die();
+                }
+
+                mosde = monster.dead;
+
+                // disappear if in space
+                if (j === 0 && !misa) {
+                    this.monsters[address] = null;
+                    MonsterPool.storeMonster(monster);
+                    continue;
+                }
+
+                let rel_dest;
+                let light_source;
+
+                // PROCESS WITH STRATEGY
+                // dummy monsters optimization - at least 2 function call is being missed
+                if (mosde || misa) {
+                    monster.moves = true;
+                    monster.direction = 2;
+                }
+                else {
+                
+                    // logical processing (load sensors)
+
+                    if (!mosde && !comsnu) {
+                        monster.co_hp = comonster.hp;     // sensor-only
+                        monster.co_energy = comonster.energy;     // sensor-only    
+                        monster.co_age = comonster.age;     // sensor-only      
+                        monster.co_dead = comsde;     // sensor-only      
+                        monster.co_food = comonster.being_food;       // sensor-only
+                        
+                        if (comsde || comonster.strategy !== monster.strategy)
+                            monster.app_difference = 1;
+                        else {
+
+                            let dr = (monster.app_r - comonster.app_r);
+                            let dg = (monster.app_g - comonster.app_g);
+                            let db = (monster.app_b - comonster.app_b);
+
+                            let sdc = (dr * dr + dg * dg + db * db) / 3;
+
+                            monster.app_difference = sdc;
+                        }
+                    }
+
+                    // compute left and right surroundings
+                
+                    let ldx, ldy, rdx, rdy;
+
+                    ldx = dy;
+                    ldy = -dx;
+                    rdx = -ldx;
+                    rdy = -ldy;
+
+                    let laddr = i + ldx + (j + ldy) * canW; 
+                    let raddr = i + rdx + (j + rdy) * canW;
+
+                    let l_in_bounds = i + ldx >= 0 && j + ldy >= 0 && i + ldx < canW && j + ldy < canH;
+                    let r_in_bounds = i + rdx >= 0 && j + rdy >= 0 && i + rdx < canW && j + rdy < canH;
+
+                    monster.sth_left = (l_in_bounds && this.monsters[laddr] !== null);      //sensor-only
+                    monster.sth_right = (r_in_bounds && this.monsters[raddr] !== null);     //sensor-only
+                                                
+                    rel_dest = (j / canH);
+                    rel_dest *= rel_dest;
+                    light_source = period / (0.1 + rel_dest);  
+
+                    monster.light = light_source;         // sensor-only                
+
+                    // physical processing (do stuff)
+                    monster.process();
+
+                }
+                
+                // move the monster
+                if (monster.moves) {
+                    
+                    if (comsnu || misa) {
+
+                        if (co_in_bounds && comsnu) {
+                            this.monsters[coaddress] = monster;
+                            this.monsters[address] = null;        
+
+                            // moving right, can lookahead 1 step
+                            if (monster.direction === 1) {
+                                k = k + 1;
+                            }      
+                        }
+
+                        if (misa) {
+                            
+                            if (!comsnu) {
+                                this.monsters[address] = null;
+                                MonsterPool.storeMonster(monster);
+                                //this.monsters[coaddress] = null;
+                                //MonsterPool.storeMonster(comonster);
+
+                                if (comsde) {
+
+                                    comonster.being_food += 200 * Math.random();
+
+                                    if (comonster.being_food > 1000) {
+
+                                        let p = Math.random();
+                                        comonster.strategy = (p < 0.33 ? MATRIX_STRATEGY : (p < 0.66 ? STOCHASTIC_STRATEGY : TURING_STRATEGY));
+                                        //comonster.strategy = TURING_STRATEGY;
+                                        //comonster.strategy = MATRIX_STRATEGY;                                       
+                                        comonster.init(false);
+                                        comonster.already_processed = !this.already_processed;
+                                    }
+                                }
+                                
+                                else {
+                                    
+                                    let surprize = Math.random();
+                                    if (surprize < 0.1 && this.age > EDEM_AGE)
+                                        comonster.hp -= 500 * Math.random();
+                                    else if (surprize < 0.9) {
+                                        comonster.mutate(true);
+                                    }
+                                    else {
+                                        comonster.energy += 500 * Math.random();
+                                    }
+                                }
+                            }
+                            
+                            if (!co_in_bounds)  {
+
+                                if (Math.random() < 0.9) {
+                                    this.monsters[address] = null;
+                                    MonsterPool.storeMonster(monster);
+                                }
+                                else {
+                                    monster.die();
+                                }
+                            }
+                        }
+
+                    }
+
+                    monster.moves = false;
+
+                    continue;
+
+                }
+
+                // change direction
+                if (monster.turns_left) {
+                    monster.direction = (monster.direction + 3) % 4;
+
+                    monster.turns_left = false;
+                    continue;
+                }
+                
+                if (monster.turns_right) {
+                    monster.direction = (monster.direction + 5) % 4;
+
+                    monster.turns_right = false;
+                    continue;
+                }
+
+                // do photosynthesis (todo)
+                if (monster.produces) {               
+
+                    monster.energy = monster.energy - 20 + 12 * light_source + (this.age < EDEM_AGE ? 60 : 0);
+                    monster.hp = monster.hp + 1 / (0.5 + rel_dest);
+                    monster.energy = Math.max(0, Math.min(1000, monster.energy));    
+                    monster.hp = Math.max(0, Math.min(1000, monster.hp));
+
+                    monster.produces = false;        
+                    continue;                
+                }
+
+                // eat
+                if (monster.eats) {
+                    if (!comsnu && comsde) {
+
+                        let new_en = Math.min(comonster.being_food, 500);
+                        comonster.being_food -= new_en;
+                        monster.hp = Math.min(monster.hp + new_en / 2, 1000);
+                        monster.energy = Math.min(monster.energy + new_en / 2, 1000);
+
+                        if (comonster.being_food <= 0) {
+                            //this.monsters[coaddress] = monster;
+                            //this.monsters[address] = null;
+                            this.monsters[coaddress] = null;
+                            MonsterPool.storeMonster(comonster);
+                        }
+                    }
+
+                    monster.eats = false;   
+                    continue;
+                }
+
+                // breed
+                if (monster.breeds) {
+                    
+                    if ((comsnu || comsde) && co_in_bounds) {
+
+                        if (!comsnu) {
+                            
+                            if (comonster.being_food > 5) { 
+                                monster.breeds = false;
+                                continue;
+                            }
+                            
+                            let cbf = comonster.being_food / 2;                            
+    
+                            monster.hp = monster.hp + cbf;
+                            monster.energy = monster.energy + cbf;
+                        }
+                        
+                        if (comsnu)
+                            this.monsters[coaddress] = MonsterPool.fetchMonster();
+                        
+                        let child = this.monsters[coaddress];
+                        child.derive(monster);
+
+                        let nhp = monster.hp / 2;
+                        let nen = monster.energy / 2 - 4;
+
+                        child.hp = nhp;
+                        monster.hp = nhp;
+                        child.energy = nen;
+                        monster.energy = nen;
+                        monster.age = 0;
+                        child.already_processed = monster.already_processed;
+                        
+                    }              
+                    
+                    monster.breeds = false;            
+                    continue;
+                }
+                
+                let comsa = !comsnu && !comsde;
+
+                // feed
+                if (monster.feeds) {
+                    
+                    if (comsa) {
+                        let add_en = Math.min(monster.energy, 200);
+                        monster.energy -= add_en;
+                        comonster.energy += add_en;
+                    }                        
+                    
+                    monster.feeds = false; 
+                    continue;
+                }
+
+                // heal
+                if (monster.heals) {
+                    let add_hp = Math.min(monster.energy, 100);
+                    monster.energy -= add_hp;
+                    add_hp *= 2;
+                    monster.hp += add_hp;
+                    
+                    monster.heals = false; 
+                    continue;
+                }
+
+                // attack
+                if (monster.attacks) {
+                    if (comsa) {
+                        comonster.hp = Math.max(comonster.hp - 80, 0);
+                        monster.energy = Math.max(monster.energy - 2, 0);
+                                                    
+                        comonster.view_attacked = true;                            
+                    }
+                    
+                    monster.attacks = false; 
+                    continue;
+                }
+                                    
+            }
+
+            this.savedStep = 0;
+            this.age = this.age + 1;
+            this.already_processed = !this.already_processed;
+
+            return true;
+
+            
+        }
+
+        process(since) {
+
+            return this.keepProcessing(since);
+
+        }
+    }
+
+    let map = new MonsterField(canW, canH);
+
+    var lastLoop = Date.now();
+
+    var approx_fps = 60;
+
+    var last_alpha = false;
+
+    // (2)
+    function sec() {
+
+        last_alpha = !last_alpha;
+        
+        let res = !map.process(lastLoop);
+        
+        var thisLoop = Date.now();
+
+        let fps = 1000 / Math.max(thisLoop - lastLoop, 10);
+
+        let fps_epsilon = 0.01;
+        approx_fps = fps * fps_epsilon + approx_fps * (1 - fps_epsilon);
+        
+        document.getElementById("fps").innerHTML = "FPS: " + Math.floor(approx_fps);
+        document.getElementById("generation").innerHTML = "Generations: " + map.age;
+        
+        
+        if (res) {
+            lastLoop = thisLoop;
+            //window.requestAnimationFrame(sec);
+            //return;
+        }
+        
+        let imageDataData = imageData.data;
+        
+        for (let j = 0; j < canH; j += 1) {
+
+            let jw = j * canW;
+
+            for (let i = 0; i < canW; i += 1) {
+
+                let center = (i + jw) << 2;
+
+                let monster = map.monsters[i + jw];
+                
+                if (monster !== null) {
+
+                    // VISUALIZATION
+ 
+                    // physical rendering
+                    let render_criterium = monster.hp;
+
+                    if (monster.view_attacked) {
+                        imageDataData[center + 0] = 255;
+                        imageDataData[center + 1] = 255;
+                        imageDataData[center + 2] = 0;
+                    }
+                    else if (monster.is_alpha) {
+                        imageDataData[center + 0] = 0; //last_alpha ? 0 : 255;
+                        imageDataData[center + 1] = 255;
+                        imageDataData[center + 2] = last_alpha ? 255 : 0;
+                    }
+                    else if (!monster.dead) {
+
+                        // stats  
+                        if (VISUALIZATION == 0) {                
+                            imageDataData[center + 0] = 255 * (1 - Math.min(render_criterium, 1000) / 1000);
+                            imageDataData[center + 1] = 255 * Math.min(render_criterium, 1000) / 1000;
+                            imageDataData[center + 2] = 255 * Math.min(monster.energy, 1000) / 1000;
+                        }
+
+                        // clans
+                        else if (VISUALIZATION == 1) { 
+                            imageDataData[center + 0] = 255 * monster.app_r;
+                            imageDataData[center + 1] = 255 * monster.app_g;
+                            imageDataData[center + 2] = 255 * monster.app_b;
+                        }
+    
+                        // strategies
+                        else if (VISUALIZATION == 2) { 
+                            imageDataData[center + 0] = (monster.strategy === MATRIX_STRATEGY ? 255 : 0);
+                            imageDataData[center + 1] = (monster.strategy === STOCHASTIC_STRATEGY ? 255 : 0);
+                            imageDataData[center + 2] = (monster.strategy === TURING_STRATEGY ? 255 : 0);
+                        }
+
+                        // age        
+                        else if (VISUALIZATION == 3) {                 
+                            imageDataData[center + 1] = 255 * (1 - Math.min(monster.age, 400) / 400);
+                            imageDataData[center + 0] = 255 * Math.min(monster.age, 400) / 400;
+                        }
+                        
+                    }
+                    else {
+                        imageDataData[center + 0] = 64 + (255 - 64) * monster.being_food / 1000;
+                        imageDataData[center + 1] = 64 + (255 - 64) * monster.being_food / 1000;
+                        imageDataData[center + 2] = 64 + (255 - 64) * monster.being_food / 1000;
+                    }
+                    
+                    
+                    
+                    monster.clean_view();
+                }
+                else {
+                    imageDataData[center + 0] = 0;
+                    imageDataData[center + 1] = 0;
+                    imageDataData[center + 2] = 0;
+                }
+                
+            }
+        }
+
+        //let tmpImg = imageData;
+        //imageData = imageData2;
+        //imageData2 = tmpImg;
+    
+        //ctx.save();
+        ctx.putImageData(imageData, 0, 0);
+        //ctx.restore();
+
+        let additional_frames = 1000;
+
+        let again = map.process(lastLoop);
+        additional_frames--;
+
+        while (again && additional_frames > 0) {
+            again = map.process(lastLoop);
+            additional_frames--;
+        }
+
+        lastLoop = thisLoop;
+
+        window.requestAnimationFrame(sec);
+
+    };
+
+    //setInterval(sec, 400); // использовать функцию
+
+    
+
+    window.requestAnimationFrame(sec);
+
+
+</script>
+
+</body>
+</html>
