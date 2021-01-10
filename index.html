@@ -1,6 +1,46 @@
 <!DOCTYPE html>
 <html>
 
+<head>
+  <meta charset="utf-8">
+  <title>GODDAMNED LIFE</title>
+    
+  <style>
+   body{
+    background-color: #000000; /* Цвет фона веб-страницы */
+   } 
+   h2 {
+        color: #FFFF00;
+    }
+   p {
+        color: #FFFFFF;
+    }
+   button {
+      background-color: #111111; /* Green */
+      border: 2px solid #00FF00;
+      color: #00FF00;
+      padding: 15px 32px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      font-weight: bold;
+    }
+   button:hover {
+      background-color: #00FF00; /* Green */
+      border: 2px solid #00FF00;
+      color: #000000;
+      padding: 15px 32px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      font-weight: bold;
+    }
+  </style>
+
+</head>
+
 <body>
 
 <h2> Goddamned cyberaquarium </h2>
@@ -1666,6 +1706,7 @@
                         else if (VISUALIZATION == 3) {                 
                             imageDataData[center + 1] = 255 * (1 - Math.min(monster.age, 400) / 400);
                             imageDataData[center + 0] = 255 * Math.min(monster.age, 400) / 400;
+                            imageDataData[center + 2] = 0;
                         }
                         
                     }
