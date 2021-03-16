@@ -8,4 +8,4 @@ Draft edition. I wanted to make a virtual life like those guys in Cyberbiology, 
 
 ## Play here:
 
-https://epromee.github.io/virtual_life_sim_1/
+https://epromee.github.io/virtual-life-sim-1/
